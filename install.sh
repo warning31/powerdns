@@ -3,20 +3,20 @@
 set -euo pipefail
 
 # Değişkenler - Kendi ortamınıza göre güncelleyin
-PDNS_DB_ROOT_PASSWORD="pdns_root_password"
+PDNS_DB_ROOT_PASSWORD="123456"
 PDNS_DB_NAME="powerdns"
 PDNS_DB_USER="powerdns"
-PDNS_DB_PASSWORD="powerdns_password"
+PDNS_DB_PASSWORD="123456"
 POWERADMIN_DB_USER="poweradmin"
-POWERADMIN_DB_PASSWORD="poweradmin_password"
-APACHE_SERVER_NAME="poweradmin.example.com"
+POWERADMIN_DB_PASSWORD="123456"
+NGINX_SERVER_NAME="deneme.avciweb.site"
 
-# Güncelleme ve temel bağımlılıkların kurulumu
+# Sistem güncelleme ve temel bağımlılıkların kurulumu
 echo "Sistem güncelleniyor..."
 sudo apt update && sudo apt upgrade -y
 
 echo "Gerekli paketler kuruluyor..."
-sudo apt install -y software-properties-common curl gnupg2 lsb-release
+sudo apt install -y software-properties-common curl gnupg2 lsb-release git
 
 # MariaDB kurulumu
 echo "MariaDB kuruluyor..."
@@ -28,11 +28,13 @@ sudo systemctl enable mariadb
 
 # MariaDB Güvenli Kurulum (otomatikleştirilmiş)
 echo "MariaDB güvenli kurulumu yapılıyor..."
-sudo mysql -e "UPDATE mysql.user SET Password = PASSWORD('${PDNS_DB_ROOT_PASSWORD}') WHERE User = 'root';"
-sudo mysql -e "DELETE FROM mysql.user WHERE User='';"
-sudo mysql -e "DROP DATABASE IF EXISTS test;"
-sudo mysql -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
-sudo mysql -e "FLUSH PRIVILEGES;"
+sudo mysql <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${PDNS_DB_ROOT_PASSWORD}';
+DROP USER IF EXISTS ''@'localhost';
+DROP USER IF EXISTS 'test'@'localhost';
+DROP DATABASE IF EXISTS test;
+FLUSH PRIVILEGES;
+EOF
 
 # PowerDNS deposunun eklenmesi
 echo "PowerDNS deposu ekleniyor..."
@@ -76,9 +78,9 @@ echo "PowerDNS servisi yeniden başlatılıyor..."
 sudo systemctl restart pdns
 sudo systemctl enable pdns
 
-# Apache ve PHP kurulumu
-echo "Apache ve PHP kuruluyor..."
-sudo apt install -y apache2 libapache2-mod-php php php-mysql php-gd php-xml php-mbstring php-zip
+# Nginx ve PHP kurulumu
+echo "Nginx ve PHP kuruluyor..."
+sudo apt install -y nginx php-fpm php-mysql php-gd php-xml php-mbstring php-zip
 
 # PowerAdmin kurulumu
 echo "PowerAdmin kuruluyor..."
@@ -95,36 +97,49 @@ sudo sed -i "s/'password': .*/'password': '${PDNS_DB_PASSWORD}',/" config.py
 sudo sed -i "s/'database': .*/'database': '${PDNS_DB_NAME}',/" config.py
 sudo sed -i "s/'host': .*/'host': '127.0.0.1',/" config.py
 
-# Apache sanal sunucusu yapılandırması
-echo "Apache sanal sunucusu yapılandırılıyor..."
-sudo tee /etc/apache2/sites-available/poweradmin.conf > /dev/null <<EOL
-<VirtualHost *:80>
-    ServerName ${APACHE_SERVER_NAME}
-    DocumentRoot /var/www/html/poweradmin
+# Nginx sanal sunucusu yapılandırması
+echo "Nginx sanal sunucusu yapılandırılıyor..."
+sudo tee /etc/nginx/sites-available/poweradmin > /dev/null <<EOL
+server {
+    listen 80;
+    server_name ${NGINX_SERVER_NAME};
 
-    <Directory /var/www/html/poweradmin>
-        Options Indexes FollowSymLinks
-        AllowOverride All
-        Require all granted
-    </Directory>
+    root /var/www/html/poweradmin;
+    index index.php index.html index.htm;
 
-    ErrorLog \${APACHE_LOG_DIR}/poweradmin_error.log
-    CustomLog \${APACHE_LOG_DIR}/poweradmin_access.log combined
-</VirtualHost>
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')-fpm.sock;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+
+    error_log /var/log/nginx/poweradmin_error.log;
+    access_log /var/log/nginx/poweradmin_access.log;
+}
 EOL
 
-sudo a2ensite poweradmin.conf
-sudo a2enmod rewrite
-sudo systemctl reload apache2
+# Nginx yapılandırmasını etkinleştirme
+sudo ln -s /etc/nginx/sites-available/poweradmin /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
 
 # Dosya izinlerinin ayarlanması
 echo "Dosya izinleri ayarlanıyor..."
 sudo chown -R www-data:www-data /var/www/html/poweradmin
+sudo find /var/www/html/poweradmin -type d -exec chmod 755 {} \;
+sudo find /var/www/html/poweradmin -type f -exec chmod 644 {} \;
 
 # Firewall ayarları (isteğe bağlı)
 echo "Firewall ayarları yapılıyor..."
-sudo ufw allow 80/tcp
+sudo ufw allow 'Nginx Full'
 sudo ufw allow 8081/tcp
 sudo ufw reload
 
-echo "Kurulum tamamlandı! PowerAdmin'ı tarayıcınızda ${APACHE_SERVER_NAME} adresinden erişebilirsiniz."
+echo "Kurulum tamamlandı! PowerAdmin'ı tarayıcınızda http://${NGINX_SERVER_NAME} adresinden erişebilirsiniz."
