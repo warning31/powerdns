@@ -10,6 +10,7 @@ PDNS_DB_PASSWORD="123456"
 POWERADMIN_DB_USER="poweradmin"
 POWERADMIN_DB_PASSWORD="123456"
 NGINX_SERVER_NAME="deneme.avciweb.site"
+EMAIL="your-email@example.com"  # Let's Encrypt için e-posta adresiniz
 
 # Sistem güncelleme ve temel bağımlılıkların kurulumu
 echo "Sistem güncelleniyor..."
@@ -36,16 +37,37 @@ DROP DATABASE IF EXISTS test;
 FLUSH PRIVILEGES;
 EOF
 
-# PowerDNS deposunun eklenmesi (focal kullanılarak)
+# PowerDNS deposunun eklenmesi ve yapılandırılması
 echo "PowerDNS deposu ekleniyor..."
-curl https://repo.powerdns.com/FD380FBB-pub.asc | sudo gpg --dearmor -o /usr/share/keyrings/powerdns-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/powerdns-archive-keyring.gpg] https://repo.powerdns.com/ubuntu focal main" | sudo tee /etc/apt/sources.list.d/powerdns.list
 
-sudo apt update
+# Anahtarların ve dizinlerin oluşturulması
+sudo install -d /etc/apt/keyrings
+
+# PowerDNS Auth Master anahtarının indirilmesi
+curl https://repo.powerdns.com/CBC8B383-pub.asc | sudo tee /etc/apt/keyrings/auth-master-pub.asc > /dev/null
+
+# PowerDNS deposu eklenmesi
+sudo tee /etc/apt/sources.list.d/pdns.list > /dev/null <<EOL
+deb [signed-by=/etc/apt/keyrings/auth-master-pub.asc] http://repo.powerdns.com/ubuntu jammy-auth-master main
+EOL
+
+# Paket önceliklerinin ayarlanması
+sudo tee /etc/apt/preferences.d/auth-master > /dev/null <<EOL
+Package: auth*
+Pin: origin repo.powerdns.com
+Pin-Priority: 600
+EOL
+
+# Paket listelerinin güncellenmesi
+sudo apt-get update
 
 # PowerDNS kurulumu
-echo "PowerDNS ve gerekli modüller kuruluyor..."
-sudo apt install -y pdns-server pdns-backend-mysql
+echo "PowerDNS kuruluyor..."
+sudo apt-get install -y pdns-server
+
+# PowerDNS backend (MySQL) kurulumu
+echo "PowerDNS MySQL backend kuruluyor..."
+sudo apt-get install -y pdns-backend-mysql
 
 # PowerDNS veritabanının oluşturulması
 echo "PowerDNS veritabanı oluşturuluyor..."
@@ -99,6 +121,7 @@ sudo sed -i "s/'host': .*/'host': '127.0.0.1',/" config.py
 
 # Nginx sanal sunucusu yapılandırması
 echo "Nginx sanal sunucusu yapılandırılıyor..."
+PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
 sudo tee /etc/nginx/sites-available/poweradmin > /dev/null <<EOL
 server {
     listen 80;
@@ -113,7 +136,7 @@ server {
 
     location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')-fpm.sock;
+        fastcgi_pass unix:/var/run/php/php${PHP_VERSION}-fpm.sock;
     }
 
     location ~ /\.ht {
@@ -136,10 +159,26 @@ sudo chown -R www-data:www-data /var/www/html/poweradmin
 sudo find /var/www/html/poweradmin -type d -exec chmod 755 {} \;
 sudo find /var/www/html/poweradmin -type f -exec chmod 644 {} \;
 
+# Let's Encrypt ile HTTPS kurulumu
+echo "Let's Encrypt kurulumu yapılıyor..."
+sudo apt install -y certbot python3-certbot-nginx
+
+echo "SSL sertifikası alınıyor..."
+sudo certbot --nginx -d ${NGINX_SERVER_NAME} --non-interactive --agree-tos -m ${EMAIL} --redirect
+
+# Sertifika yenileme testi
+sudo certbot renew --dry-run
+
 # Firewall ayarları (isteğe bağlı)
 echo "Firewall ayarları yapılıyor..."
 sudo ufw allow 'Nginx Full'
 sudo ufw allow 8081/tcp
 sudo ufw reload
 
-echo "Kurulum tamamlandı! PowerAdmin'ı tarayıcınızda http://${NGINX_SERVER_NAME} adresinden erişebilirsiniz."
+# Fail2Ban kurulumu
+echo "Fail2Ban kuruluyor..."
+sudo apt install -y fail2ban
+sudo systemctl enable fail2ban
+sudo systemctl start fail2ban
+
+echo "Kurulum tamamlandı! PowerAdmin'ı tarayıcınızda https://${NGINX_SERVER_NAME} adresinden erişebilirsiniz."
