@@ -36,10 +36,10 @@ DROP DATABASE IF EXISTS test;
 FLUSH PRIVILEGES;
 EOF
 
-# PowerDNS deposunun eklenmesi
+# PowerDNS deposunun eklenmesi (focal kullanılarak)
 echo "PowerDNS deposu ekleniyor..."
 curl https://repo.powerdns.com/FD380FBB-pub.asc | sudo gpg --dearmor -o /usr/share/keyrings/powerdns-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/powerdns-archive-keyring.gpg] https://repo.powerdns.com/ubuntu $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/powerdns.list
+echo "deb [signed-by=/usr/share/keyrings/powerdns-archive-keyring.gpg] https://repo.powerdns.com/ubuntu focal main" | sudo tee /etc/apt/sources.list.d/powerdns.list
 
 sudo apt update
 
